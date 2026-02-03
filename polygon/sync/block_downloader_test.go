@@ -60,6 +60,7 @@ func newBlockDownloaderTestWithOpts(t *testing.T, opts blockDownloaderTestOpts) 
 		blocksVerifier,
 		store,
 		opts.getOrCreateDefaultBlockLimit(),
+		opts.getOrCreateDefaultWaypointLimit(),
 		WithRetryBackOff(time.Millisecond),
 		WithMaxWorkers(opts.getOrCreateDefaultMaxWorkers()),
 	)
@@ -77,6 +78,7 @@ type blockDownloaderTestOpts struct {
 	blocksVerifier     BlocksVerifier
 	maxWorkers         int
 	blockLimit         uint
+	waypointLimit      uint
 }
 
 func (opts blockDownloaderTestOpts) getOrCreateDefaultCheckpointVerifier() WaypointHeadersVerifier {
@@ -119,6 +121,10 @@ func (opts blockDownloaderTestOpts) getOrCreateDefaultMaxWorkers() int {
 
 func (opts blockDownloaderTestOpts) getOrCreateDefaultBlockLimit() uint {
 	return opts.blockLimit // default to 0 if not set
+}
+
+func (opts blockDownloaderTestOpts) getOrCreateDefaultWaypointLimit() uint {
+	return opts.waypointLimit // default to 0 if not set
 }
 
 type blockDownloaderTest struct {
@@ -759,4 +765,126 @@ func TestBlockDownloaderDownloadBlocksRespectsBlockLimit(t *testing.T) {
 			require.Len(t, insertedBlocks, tc.wantNumInsertedBlocks)
 		})
 	}
+}
+
+func TestBlockDownloaderDownloadBlocksRespectsWaypointLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name                  string
+		waypointLimit         uint
+		numMilestones         int
+		wantNumBlockFetches   int
+		wantNumInsertedBlocks int
+	}{
+		{
+			// limit 2 waypoints
+			// 100 peers
+			// 10 milestones x 12 blocks each
+			// the downloader should fetch only 2 milestones = 24 blocks
+			name:                  "waypoint limit less than available",
+			waypointLimit:         2,
+			numMilestones:         10,
+			wantNumBlockFetches:   2,
+			wantNumInsertedBlocks: 24,
+		},
+		{
+			// limit 5 waypoints
+			// 100 peers
+			// 10 milestones x 12 blocks each
+			// the downloader should fetch only 5 milestones = 60 blocks
+			name:                  "waypoint limit restricts to 5",
+			waypointLimit:         5,
+			numMilestones:         10,
+			wantNumBlockFetches:   5,
+			wantNumInsertedBlocks: 60,
+		},
+		{
+			// limit 0 waypoints (unlimited)
+			// 100 peers
+			// 4 milestones x 12 blocks each
+			// the downloader should fetch all 4 milestones = 48 blocks
+			name:                  "waypoint limit 0 means unlimited",
+			waypointLimit:         0,
+			numMilestones:         4,
+			wantNumBlockFetches:   4,
+			wantNumInsertedBlocks: 48,
+		},
+		{
+			// limit 100 waypoints (more than available)
+			// 100 peers
+			// 4 milestones x 12 blocks each
+			// the downloader should fetch all 4 milestones = 48 blocks
+			name:                  "waypoint limit greater than available",
+			waypointLimit:         100,
+			numMilestones:         4,
+			wantNumBlockFetches:   4,
+			wantNumInsertedBlocks: 48,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			test := newBlockDownloaderTestWithOpts(t, blockDownloaderTestOpts{
+				waypointLimit: tc.waypointLimit,
+			})
+			test.waypointReader.EXPECT().
+				MilestonesFromBlock(gomock.Any(), gomock.Any()).
+				Return(test.fakeMilestones(tc.numMilestones), nil).
+				Times(1)
+			test.p2pService.EXPECT().
+				ListPeersMayHaveBlockNum(gomock.Any()).
+				Return(test.fakePeers(100)).
+				Times(1)
+			test.p2pService.EXPECT().
+				FetchHeaders(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+				DoAndReturn(test.defaultFetchHeadersMock()).
+				Times(tc.wantNumBlockFetches)
+			test.p2pService.EXPECT().
+				FetchBodies(gomock.Any(), gomock.Any(), gomock.Any()).
+				DoAndReturn(test.defaultFetchBodiesMock()).
+				Times(tc.wantNumBlockFetches)
+			var insertedBlocks []*types.Block
+			test.store.EXPECT().
+				InsertBlocks(gomock.Any(), gomock.Any()).
+				DoAndReturn(test.defaultInsertBlocksMock(&insertedBlocks)).
+				Times(1)
+
+			_, err := test.blockDownloader.DownloadBlocksUsingMilestones(context.Background(), 1, nil)
+			require.NoError(t, err)
+			require.Len(t, insertedBlocks, tc.wantNumInsertedBlocks)
+		})
+	}
+}
+
+func TestBlockDownloaderDownloadBlocksWaypointLimitCombinedWithBlockLimit(t *testing.T) {
+	// Test that waypoint limit is applied before block limit
+	// 10 milestones x 12 blocks each = 120 blocks total
+	// waypointLimit = 3 -> limits to 3 milestones = 36 blocks
+	// blockLimit = 5000 -> would allow all 120 blocks, but waypoint limit kicks in first
+	test := newBlockDownloaderTestWithOpts(t, blockDownloaderTestOpts{
+		waypointLimit: 3,
+		blockLimit:    5000,
+	})
+	test.waypointReader.EXPECT().
+		MilestonesFromBlock(gomock.Any(), gomock.Any()).
+		Return(test.fakeMilestones(10), nil).
+		Times(1)
+	test.p2pService.EXPECT().
+		ListPeersMayHaveBlockNum(gomock.Any()).
+		Return(test.fakePeers(100)).
+		Times(1)
+	test.p2pService.EXPECT().
+		FetchHeaders(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(test.defaultFetchHeadersMock()).
+		Times(3)
+	test.p2pService.EXPECT().
+		FetchBodies(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(test.defaultFetchBodiesMock()).
+		Times(3)
+	var insertedBlocks []*types.Block
+	test.store.EXPECT().
+		InsertBlocks(gomock.Any(), gomock.Any()).
+		DoAndReturn(test.defaultInsertBlocksMock(&insertedBlocks)).
+		Times(1)
+
+	_, err := test.blockDownloader.DownloadBlocksUsingMilestones(context.Background(), 1, nil)
+	require.NoError(t, err)
+	require.Len(t, insertedBlocks, 36) // 3 milestones x 12 blocks
 }

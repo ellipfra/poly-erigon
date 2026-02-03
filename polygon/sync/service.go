@@ -47,6 +47,7 @@ func NewService(
 	statusDataProvider *sentry.StatusDataProvider,
 	executionClient executionproto.ExecutionClient,
 	blockLimit uint,
+	waypointLimit uint,
 	bridgeService *bridge.Service,
 	heimdallService *heimdall.Service,
 	notifications *shards.Notifications,
@@ -76,6 +77,7 @@ func NewService(
 		blocksVerifier,
 		store,
 		blockLimit,
+		waypointLimit,
 	)
 	ccBuilderFactory := NewCanonicalChainBuilderFactory(chainConfig, borConfig, heimdallService, signaturesCache, logger)
 	events := NewTipEvents(logger, p2pService, heimdallService, minedBlockReg)

@@ -1077,6 +1077,7 @@ func New(ctx context.Context, stack *node.Node, config *ethconfig.Config, logger
 			statusDataProvider,
 			executionRpc,
 			config.LoopBlockLimit,
+			config.Sync.PolygonSyncWaypointLimit,
 			polygonBridge,
 			heimdallService,
 			backend.notifications,

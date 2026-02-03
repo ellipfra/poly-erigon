@@ -287,6 +287,7 @@ type Sync struct {
 	BreakAfterStage            string
 	LoopBlockLimit             uint
 	ParallelStateFlushing      bool
+	PolygonSyncWaypointLimit   uint // Max waypoints per sync cycle (Polygon only, 0 = unlimited)
 
 	ChaosMonkey              bool
 	AlwaysGenerateChangesets bool

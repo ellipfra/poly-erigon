@@ -54,6 +54,7 @@ func NewBlockDownloader(
 	blocksVerifier BlocksVerifier,
 	store Store,
 	blockLimit uint,
+	waypointLimit uint,
 	opts ...BlockDownloaderOption,
 ) *BlockDownloader {
 	bd := &BlockDownloader{
@@ -67,6 +68,7 @@ func NewBlockDownloader(
 		retryBackOff:       notEnoughPeersBackOffDuration,
 		maxWorkers:         blockDownloaderEstimatedRamPerWorker.WorkersByRAMOnly(),
 		blockLimit:         blockLimit,
+		waypointLimit:      waypointLimit,
 	}
 
 	for _, opt := range opts {
@@ -87,6 +89,7 @@ type BlockDownloader struct {
 	retryBackOff       time.Duration
 	maxWorkers         int
 	blockLimit         uint
+	waypointLimit      uint
 }
 
 func (d *BlockDownloader) DownloadBlocksUsingCheckpoints(ctx context.Context, start uint64, end *uint64) (*types.Header, error) {
@@ -188,6 +191,7 @@ func (d *BlockDownloader) downloadBlocksUsingWaypoints(
 		"waypointsEnd", waypoints[len(waypoints)-1].EndBlock().Uint64(),
 		"kind", reflect.TypeOf(waypoints[0]),
 		"blockLimit", d.blockLimit,
+		"waypointLimit", d.waypointLimit,
 	}
 	if end != nil {
 		initialInfoLogArgs = append(initialInfoLogArgs, "end", *end)
@@ -427,6 +431,12 @@ func (d *BlockDownloader) fetchVerifiedBlocks(
 }
 
 func (d *BlockDownloader) limitWaypoints(waypoints []heimdall.Waypoint) []heimdall.Waypoint {
+	// Apply waypoint count limit first (Polygon-specific optimization)
+	if d.waypointLimit > 0 && uint(len(waypoints)) > d.waypointLimit {
+		waypoints = waypoints[:d.waypointLimit]
+	}
+
+	// Then apply block limit
 	if d.blockLimit == 0 {
 		return waypoints
 	}
