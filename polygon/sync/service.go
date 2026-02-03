@@ -48,6 +48,7 @@ func NewService(
 	executionClient executionproto.ExecutionClient,
 	blockLimit uint,
 	waypointLimit uint,
+	waypointCatchupThreshold uint,
 	bridgeService *bridge.Service,
 	heimdallService *heimdall.Service,
 	notifications *shards.Notifications,
@@ -78,6 +79,7 @@ func NewService(
 		store,
 		blockLimit,
 		waypointLimit,
+		waypointCatchupThreshold,
 	)
 	ccBuilderFactory := NewCanonicalChainBuilderFactory(chainConfig, borConfig, heimdallService, signaturesCache, logger)
 	events := NewTipEvents(logger, p2pService, heimdallService, minedBlockReg)

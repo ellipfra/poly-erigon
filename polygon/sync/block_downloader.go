@@ -55,20 +55,22 @@ func NewBlockDownloader(
 	store Store,
 	blockLimit uint,
 	waypointLimit uint,
+	waypointCatchupThreshold uint,
 	opts ...BlockDownloaderOption,
 ) *BlockDownloader {
 	bd := &BlockDownloader{
-		logger:             logger,
-		p2pService:         p2pService,
-		waypointReader:     waypointReader,
-		checkpointVerifier: checkpointVerifier,
-		milestoneVerifier:  milestoneVerifier,
-		blocksVerifier:     blocksVerifier,
-		store:              store,
-		retryBackOff:       notEnoughPeersBackOffDuration,
-		maxWorkers:         blockDownloaderEstimatedRamPerWorker.WorkersByRAMOnly(),
-		blockLimit:         blockLimit,
-		waypointLimit:      waypointLimit,
+		logger:                   logger,
+		p2pService:               p2pService,
+		waypointReader:           waypointReader,
+		checkpointVerifier:       checkpointVerifier,
+		milestoneVerifier:        milestoneVerifier,
+		blocksVerifier:           blocksVerifier,
+		store:                    store,
+		retryBackOff:             notEnoughPeersBackOffDuration,
+		maxWorkers:               blockDownloaderEstimatedRamPerWorker.WorkersByRAMOnly(),
+		blockLimit:               blockLimit,
+		waypointLimit:            waypointLimit,
+		waypointCatchupThreshold: waypointCatchupThreshold,
 	}
 
 	for _, opt := range opts {
@@ -79,17 +81,18 @@ func NewBlockDownloader(
 }
 
 type BlockDownloader struct {
-	logger             log.Logger
-	p2pService         p2pService
-	waypointReader     waypointReader
-	checkpointVerifier WaypointHeadersVerifier
-	milestoneVerifier  WaypointHeadersVerifier
-	blocksVerifier     BlocksVerifier
-	store              Store
-	retryBackOff       time.Duration
-	maxWorkers         int
-	blockLimit         uint
-	waypointLimit      uint
+	logger                   log.Logger
+	p2pService               p2pService
+	waypointReader           waypointReader
+	checkpointVerifier       WaypointHeadersVerifier
+	milestoneVerifier        WaypointHeadersVerifier
+	blocksVerifier           BlocksVerifier
+	store                    Store
+	retryBackOff             time.Duration
+	maxWorkers               int
+	blockLimit               uint
+	waypointLimit            uint
+	waypointCatchupThreshold uint
 }
 
 func (d *BlockDownloader) DownloadBlocksUsingCheckpoints(ctx context.Context, start uint64, end *uint64) (*types.Header, error) {
@@ -181,17 +184,29 @@ func (d *BlockDownloader) downloadBlocksUsingWaypoints(
 		return nil, nil
 	}
 
+	// Capture accumulated waypoints before limiting for adaptive mode detection
+	accumulatedWaypoints := uint(len(waypoints))
+
+	// Determine effective limit and mode for logging
+	effectiveLimit := d.waypointLimit
+	mode := "stable"
+	if d.waypointCatchupThreshold > 0 && accumulatedWaypoints > d.waypointCatchupThreshold {
+		effectiveLimit = 0 // unlimited for catch-up mode
+		mode = "catchup"
+	}
+
 	waypoints = d.limitWaypoints(waypoints)
 	waypoints = limitWaypointsEndBlock(waypoints, end)
 
 	initialInfoLogArgs := []interface{}{
+		"mode", mode,
+		"waypointsToProcess", len(waypoints),
+		"accumulatedWaypoints", accumulatedWaypoints,
 		"start", start,
-		"waypointsLen", len(waypoints),
 		"waypointsStart", waypoints[0].StartBlock().Uint64(),
 		"waypointsEnd", waypoints[len(waypoints)-1].EndBlock().Uint64(),
 		"kind", reflect.TypeOf(waypoints[0]),
 		"blockLimit", d.blockLimit,
-		"waypointLimit", d.waypointLimit,
 	}
 	if end != nil {
 		initialInfoLogArgs = append(initialInfoLogArgs, "end", *end)
@@ -431,9 +446,18 @@ func (d *BlockDownloader) fetchVerifiedBlocks(
 }
 
 func (d *BlockDownloader) limitWaypoints(waypoints []heimdall.Waypoint) []heimdall.Waypoint {
-	// Apply waypoint count limit first (Polygon-specific optimization)
-	if d.waypointLimit > 0 && uint(len(waypoints)) > d.waypointLimit {
-		waypoints = waypoints[:d.waypointLimit]
+	// Compute effective waypoint limit using adaptive logic:
+	// - If catchup threshold is set and we have more waypoints than the threshold,
+	//   use unlimited (0) to allow fast catch-up
+	// - Otherwise, use the configured waypoint limit for stable operation near head
+	effectiveLimit := d.waypointLimit
+	if d.waypointCatchupThreshold > 0 && uint(len(waypoints)) > d.waypointCatchupThreshold {
+		effectiveLimit = 0 // unlimited for catch-up mode
+	}
+
+	// Apply effective waypoint count limit (Polygon-specific optimization)
+	if effectiveLimit > 0 && uint(len(waypoints)) > effectiveLimit {
+		waypoints = waypoints[:effectiveLimit]
 	}
 
 	// Then apply block limit

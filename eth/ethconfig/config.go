@@ -282,12 +282,13 @@ type Sync struct {
 	ExecWorkerCount  int
 	ReconWorkerCount int
 
-	BodyCacheLimit             datasize.ByteSize
-	BodyDownloadTimeoutSeconds int // TODO: change to duration
-	BreakAfterStage            string
-	LoopBlockLimit             uint
-	ParallelStateFlushing      bool
-	PolygonSyncWaypointLimit   uint // Max waypoints per sync cycle (Polygon only, 0 = unlimited)
+	BodyCacheLimit                       datasize.ByteSize
+	BodyDownloadTimeoutSeconds           int // TODO: change to duration
+	BreakAfterStage                      string
+	LoopBlockLimit                       uint
+	ParallelStateFlushing                bool
+	PolygonSyncWaypointLimit             uint // Max waypoints per sync cycle when near head (Polygon only, 0 = unlimited)
+	PolygonSyncWaypointCatchupThreshold  uint // Waypoint count above which to allow unlimited batches (Polygon only, 0 = always use limit)
 
 	ChaosMonkey              bool
 	AlwaysGenerateChangesets bool

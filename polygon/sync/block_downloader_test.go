@@ -61,6 +61,7 @@ func newBlockDownloaderTestWithOpts(t *testing.T, opts blockDownloaderTestOpts) 
 		store,
 		opts.getOrCreateDefaultBlockLimit(),
 		opts.getOrCreateDefaultWaypointLimit(),
+		opts.getOrCreateDefaultWaypointCatchupThreshold(),
 		WithRetryBackOff(time.Millisecond),
 		WithMaxWorkers(opts.getOrCreateDefaultMaxWorkers()),
 	)
@@ -73,12 +74,13 @@ func newBlockDownloaderTestWithOpts(t *testing.T, opts blockDownloaderTestOpts) 
 }
 
 type blockDownloaderTestOpts struct {
-	checkpointVerifier WaypointHeadersVerifier
-	milestoneVerifier  WaypointHeadersVerifier
-	blocksVerifier     BlocksVerifier
-	maxWorkers         int
-	blockLimit         uint
-	waypointLimit      uint
+	checkpointVerifier       WaypointHeadersVerifier
+	milestoneVerifier        WaypointHeadersVerifier
+	blocksVerifier           BlocksVerifier
+	maxWorkers               int
+	blockLimit               uint
+	waypointLimit            uint
+	waypointCatchupThreshold uint
 }
 
 func (opts blockDownloaderTestOpts) getOrCreateDefaultCheckpointVerifier() WaypointHeadersVerifier {
@@ -125,6 +127,10 @@ func (opts blockDownloaderTestOpts) getOrCreateDefaultBlockLimit() uint {
 
 func (opts blockDownloaderTestOpts) getOrCreateDefaultWaypointLimit() uint {
 	return opts.waypointLimit // default to 0 if not set
+}
+
+func (opts blockDownloaderTestOpts) getOrCreateDefaultWaypointCatchupThreshold() uint {
+	return opts.waypointCatchupThreshold // default to 0 if not set
 }
 
 type blockDownloaderTest struct {
@@ -887,4 +893,102 @@ func TestBlockDownloaderDownloadBlocksWaypointLimitCombinedWithBlockLimit(t *tes
 	_, err := test.blockDownloader.DownloadBlocksUsingMilestones(context.Background(), 1, nil)
 	require.NoError(t, err)
 	require.Len(t, insertedBlocks, 36) // 3 milestones x 12 blocks
+}
+
+func TestBlockDownloaderAdaptiveWaypointLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name                     string
+		waypointLimit            uint
+		waypointCatchupThreshold uint
+		numMilestones            int
+		wantNumBlockFetches      int
+		wantNumInsertedBlocks    int
+	}{
+		{
+			// Stable mode: accumulated waypoints (4) <= catchup threshold (5)
+			// waypointLimit = 2 is applied
+			// 4 milestones x 12 blocks each = 48 blocks available
+			// Limited to 2 milestones = 24 blocks
+			name:                     "stable mode - uses waypoint limit",
+			waypointLimit:            2,
+			waypointCatchupThreshold: 5,
+			numMilestones:            4,
+			wantNumBlockFetches:      2,
+			wantNumInsertedBlocks:    24,
+		},
+		{
+			// Catchup mode: accumulated waypoints (10) > catchup threshold (5)
+			// waypointLimit is bypassed, all waypoints are processed
+			// 10 milestones x 12 blocks each = 120 blocks
+			name:                     "catchup mode - unlimited when above threshold",
+			waypointLimit:            2,
+			waypointCatchupThreshold: 5,
+			numMilestones:            10,
+			wantNumBlockFetches:      10,
+			wantNumInsertedBlocks:    120,
+		},
+		{
+			// Catchup mode exactly at threshold boundary
+			// accumulated waypoints (6) > catchup threshold (5)
+			// waypointLimit is bypassed
+			name:                     "catchup mode - just above threshold",
+			waypointLimit:            2,
+			waypointCatchupThreshold: 5,
+			numMilestones:            6,
+			wantNumBlockFetches:      6,
+			wantNumInsertedBlocks:    72,
+		},
+		{
+			// Stable mode exactly at threshold boundary
+			// accumulated waypoints (5) == catchup threshold (5)
+			// waypointLimit is applied (not strictly greater)
+			name:                     "stable mode - exactly at threshold",
+			waypointLimit:            2,
+			waypointCatchupThreshold: 5,
+			numMilestones:            5,
+			wantNumBlockFetches:      2,
+			wantNumInsertedBlocks:    24,
+		},
+		{
+			// catchupThreshold = 0 disables adaptive behavior, always use waypointLimit
+			name:                     "catchup threshold 0 - adaptive disabled",
+			waypointLimit:            3,
+			waypointCatchupThreshold: 0,
+			numMilestones:            10,
+			wantNumBlockFetches:      3,
+			wantNumInsertedBlocks:    36,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			test := newBlockDownloaderTestWithOpts(t, blockDownloaderTestOpts{
+				waypointLimit:            tc.waypointLimit,
+				waypointCatchupThreshold: tc.waypointCatchupThreshold,
+			})
+			test.waypointReader.EXPECT().
+				MilestonesFromBlock(gomock.Any(), gomock.Any()).
+				Return(test.fakeMilestones(tc.numMilestones), nil).
+				Times(1)
+			test.p2pService.EXPECT().
+				ListPeersMayHaveBlockNum(gomock.Any()).
+				Return(test.fakePeers(100)).
+				Times(1)
+			test.p2pService.EXPECT().
+				FetchHeaders(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+				DoAndReturn(test.defaultFetchHeadersMock()).
+				Times(tc.wantNumBlockFetches)
+			test.p2pService.EXPECT().
+				FetchBodies(gomock.Any(), gomock.Any(), gomock.Any()).
+				DoAndReturn(test.defaultFetchBodiesMock()).
+				Times(tc.wantNumBlockFetches)
+			var insertedBlocks []*types.Block
+			test.store.EXPECT().
+				InsertBlocks(gomock.Any(), gomock.Any()).
+				DoAndReturn(test.defaultInsertBlocksMock(&insertedBlocks)).
+				Times(1)
+
+			_, err := test.blockDownloader.DownloadBlocksUsingMilestones(context.Background(), 1, nil)
+			require.NoError(t, err)
+			require.Len(t, insertedBlocks, tc.wantNumInsertedBlocks)
+		})
+	}
 }

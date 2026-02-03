@@ -143,8 +143,14 @@ var (
 
 	PolygonSyncWaypointLimitFlag = cli.UintFlag{
 		Name:  "polygon.sync.waypoint.limit",
-		Usage: "Maximum number of waypoints to process per sync cycle (Polygon only, 0 = unlimited)",
-		Value: 0,
+		Usage: "Maximum number of waypoints to process per sync cycle when near chain head (Polygon only, 0 = unlimited)",
+		Value: 10,
+	}
+
+	PolygonSyncWaypointCatchupThresholdFlag = cli.UintFlag{
+		Name:  "polygon.sync.waypoint.catchup-threshold",
+		Usage: "Number of accumulated waypoints above which to allow unlimited batches for catch-up (Polygon only, 0 = always use limit)",
+		Value: 50,
 	}
 
 	BadBlockFlag = cli.StringFlag{
@@ -306,6 +312,7 @@ func ApplyFlagsForEthConfig(ctx *cli.Context, cfg *ethconfig.Config, logger log.
 	}
 	cfg.Sync.ParallelStateFlushing = ctx.Bool(SyncParallelStateFlushing.Name)
 	cfg.Sync.PolygonSyncWaypointLimit = ctx.Uint(PolygonSyncWaypointLimitFlag.Name)
+	cfg.Sync.PolygonSyncWaypointCatchupThreshold = ctx.Uint(PolygonSyncWaypointCatchupThresholdFlag.Name)
 
 	if ctx.String(BadBlockFlag.Name) != "" {
 		bytes, err := hexutil.Decode(ctx.String(BadBlockFlag.Name))

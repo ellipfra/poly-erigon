@@ -252,6 +252,7 @@ var DefaultFlags = []cli.Flag{
 	&utils.PolygonPosSingleSlotFinalityBlockAtFlag,
 	&utils.PolygonPosWitProtocolFlag,
 	&PolygonSyncWaypointLimitFlag,
+	&PolygonSyncWaypointCatchupThresholdFlag,
 
 	&utils.GDBMeFlag,
 
