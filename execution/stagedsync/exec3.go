@@ -469,7 +469,7 @@ func ExecV3(ctx context.Context,
 
 Loop:
 	for ; blockNum <= maxBlockNum; blockNum++ {
-		shouldGenerateChangesets := shouldGenerateChangeSets(cfg, blockNum, maxBlockNum, initialCycle)
+		shouldGenerateChangesets := shouldGenerateChangeSets(cfg, applyTx, blockNum, maxBlockNum, initialCycle)
 		changeSet := &changeset2.StateChangeSet{}
 		if shouldGenerateChangesets && blockNum > 0 {
 			executor.domains().SetChangesetAccumulator(changeSet)
@@ -762,9 +762,11 @@ Loop:
 
 				timeStart := time.Now()
 
-				// allow greedy prune on non-chain-tip
+				// allow greedy prune on non-chain-tip or when not generating changesets
 				pruneTimeout := 250 * time.Millisecond
-				if initialCycle {
+				if initialCycle || !shouldGenerateChangesets {
+					// When not generating changesets (finalized blocks), we can afford longer pruning
+					// since we're generating less data overall
 					pruneTimeout = 10 * time.Hour
 
 					if err = executor.tx().(kv.TemporalRwTx).GreedyPruneHistory(ctx, kv.CommitmentDomain); err != nil {
@@ -787,7 +789,9 @@ Loop:
 					errExhausted = &ErrLoopExhausted{From: startBlockNum, To: blockNum, Reason: "block batch is full"}
 					break Loop
 				}
-				if !initialCycle && canPrune {
+				// Skip pruning break if not generating changesets (finalized blocks via UseForkchoiceFinality)
+				// This allows larger batches similar to initialCycle behavior
+				if !initialCycle && canPrune && shouldGenerateChangesets {
 					errExhausted = &ErrLoopExhausted{From: startBlockNum, To: blockNum, Reason: "block batch can be pruned"}
 					break Loop
 				}
@@ -1021,7 +1025,21 @@ func blockWithSenders(ctx context.Context, db kv.RoDB, tx kv.Tx, blockReader ser
 	return b, err
 }
 
-func shouldGenerateChangeSets(cfg ExecuteBlockCfg, blockNum, maxBlockNum uint64, initialCycle bool) bool {
+// getFinalizedBlockNum returns the finalized block number from forkchoice state.
+// Returns 0 if no finalized block is set or if the hash cannot be resolved to a block number.
+func getFinalizedBlockNum(tx kv.Getter) uint64 {
+	finalizedHash := rawdb.ReadForkchoiceFinalized(tx)
+	if finalizedHash == (common.Hash{}) {
+		return 0
+	}
+	finalizedNum := rawdb.ReadHeaderNumber(tx, finalizedHash)
+	if finalizedNum == nil {
+		return 0
+	}
+	return *finalizedNum
+}
+
+func shouldGenerateChangeSets(cfg ExecuteBlockCfg, tx kv.Getter, blockNum, maxBlockNum uint64, initialCycle bool) bool {
 	if cfg.syncCfg.AlwaysGenerateChangesets {
 		return true
 	}
@@ -1031,6 +1049,18 @@ func shouldGenerateChangeSets(cfg ExecuteBlockCfg, blockNum, maxBlockNum uint64,
 	if initialCycle {
 		return false
 	}
-	// once past the initial cycle, make sure to generate changesets for the last blocks that fall in the reorg window
+
+	// Use forkchoice finalized block if enabled and available (e.g., Polygon milestones).
+	// Blocks at or before the finalized block don't need changesets since they cannot be reorged.
+	// WARNING: If finality is later reverted (e.g., faulty milestone purged by hard fork),
+	// the node will require a chaindata reset to recover.
+	if cfg.syncCfg.UseForkchoiceFinality {
+		finalizedBlockNum := getFinalizedBlockNum(tx)
+		if finalizedBlockNum > 0 && blockNum <= finalizedBlockNum {
+			return false
+		}
+	}
+
+	// Fallback: generate changesets for blocks in the reorg window (last MaxReorgDepth blocks)
 	return blockNum+cfg.syncCfg.MaxReorgDepth >= maxBlockNum
 }
