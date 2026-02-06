@@ -148,10 +148,11 @@ type Sync struct {
 	engineAPISwitcher  EngineAPISwitcher
 	blockRequestsCache *lru.ARCCache[common.Hash, struct{}]
 
-	// lastMilestoneEndBlockNum tracks the end block of the last validated milestone.
-	// This is used to set the finalized block in forkchoice updates, enabling
-	// the execution stage to skip changeset generation for finalized blocks.
-	lastMilestoneEndBlockNum uint64
+	// lastFinalizedBlockNum tracks the end block of the last validated finality
+	// waypoint (milestone or checkpoint). This is used to set the finalized block
+	// in forkchoice updates, enabling the execution stage to skip changeset
+	// generation for finalized blocks.
+	lastFinalizedBlockNum uint64
 
 	// lastTipAge tracks how far behind the chain tip the node is.
 	// Updated in commitExecution, used to detect when the event loop
@@ -167,11 +168,11 @@ func (s *Sync) commitExecution(ctx context.Context, newTip *types.Header, finali
 	// After flush, improve finalized header if possible.
 	// If newTip is at or before the last known milestone, it IS finalized.
 	tipNum := newTip.Number.Uint64()
-	if s.lastMilestoneEndBlockNum > 0 && tipNum <= s.lastMilestoneEndBlockNum {
+	if s.lastFinalizedBlockNum > 0 && tipNum <= s.lastFinalizedBlockNum {
 		finalizedHeader = newTip
-	} else if s.lastMilestoneEndBlockNum > 0 {
+	} else if s.lastFinalizedBlockNum > 0 {
 		// Try to get the milestone end block header (now available after flush)
-		if h, err := s.execution.GetHeader(ctx, s.lastMilestoneEndBlockNum); err == nil && h != nil {
+		if h, err := s.execution.GetHeader(ctx, s.lastFinalizedBlockNum); err == nil && h != nil {
 			finalizedHeader = h
 		}
 	}
@@ -277,7 +278,7 @@ func (s *Sync) handleMilestoneTipMismatch(ctx context.Context, ccb *CanonicalCha
 func (s *Sync) applyNewMilestoneOnTip(ctx context.Context, event EventNewMilestone, ccb *CanonicalChainBuilder) error {
 	milestone := event
 	if milestone.EndBlock().Uint64() <= ccb.Root().Number.Uint64() {
-		s.logger.Info(syncLogPrefix("skipping milestone - already behind root"),
+		s.logger.Debug(syncLogPrefix("skipping milestone - already behind root"),
 			"milestoneEnd", milestone.EndBlock().Uint64(),
 			"ccbRoot", ccb.Root().Number.Uint64(),
 		)
@@ -289,11 +290,11 @@ func (s *Sync) applyNewMilestoneOnTip(ctx context.Context, event EventNewMilesto
 		// Track finality even for future milestones - the milestone IS finality from Heimdall.
 		// This lets commitExecution() set finalizedHeader = newTip for blocks within this range.
 		endBlock := milestone.EndBlock().Uint64()
-		if endBlock > s.lastMilestoneEndBlockNum {
-			s.lastMilestoneEndBlockNum = endBlock
+		if endBlock > s.lastFinalizedBlockNum {
+			s.lastFinalizedBlockNum = endBlock
 		}
 
-		s.logger.Info(syncLogPrefix("putting milestone event back in the queue because our tip is behind the milestone"),
+		s.logger.Debug(syncLogPrefix("putting milestone event back in the queue because our tip is behind the milestone"),
 			"milestoneId", milestone.RawId(),
 			"milestoneStart", milestone.StartBlock().Uint64(),
 			"milestoneEnd", milestone.EndBlock().Uint64(),
@@ -333,8 +334,8 @@ func (s *Sync) applyNewMilestoneOnTip(ctx context.Context, event EventNewMilesto
 	// This enables the execution stage to skip changeset generation for finalized blocks.
 	// Use max to avoid lowering the value when an older at-tip milestone is processed
 	// after a newer ahead-of-tip milestone has already been recorded.
-	if endBlock > s.lastMilestoneEndBlockNum {
-		s.lastMilestoneEndBlockNum = endBlock
+	if endBlock > s.lastFinalizedBlockNum {
+		s.lastFinalizedBlockNum = endBlock
 	}
 
 	return ccb.PruneRoot(pruneTo)
@@ -1029,9 +1030,9 @@ func (s *Sync) initialiseCcb(ctx context.Context, result syncToTipResult) (*Cano
 		if result.latestWaypoint.EndBlock().Uint64() > tipNum {
 			return nil, fmt.Errorf("unexpected rootNum > tipNum: %d > %d", rootNum, tipNum)
 		}
-		// Initialize lastMilestoneEndBlockNum from the latest waypoint
-		s.lastMilestoneEndBlockNum = rootNum
-		s.logger.Debug(syncLogPrefix("initialized milestone finality"), "lastMilestoneEndBlock", s.lastMilestoneEndBlockNum)
+		// Initialize lastFinalizedBlockNum from the latest waypoint (milestone or checkpoint)
+		s.lastFinalizedBlockNum = rootNum
+		s.logger.Debug(syncLogPrefix("initialized milestone finality"), "lastFinalizedBlock", s.lastFinalizedBlockNum)
 	}
 
 	s.logger.Debug(syncLogPrefix("initialising canonical chain builder"), "rootNum", rootNum, "tipNum", tipNum)
@@ -1069,7 +1070,7 @@ type syncToTipResult struct {
 }
 
 func (s *Sync) syncToTip(ctx context.Context) (syncToTipResult, error) {
-	s.logger.Info(syncLogPrefix("syncToTip starting"))
+	s.logger.Debug(syncLogPrefix("syncToTip starting"))
 	latestTipOnStart, err := s.execution.CurrentHeader(ctx)
 	if err != nil {
 		return syncToTipResult{}, err
@@ -1202,8 +1203,8 @@ func (s *Sync) sync(
 
 		// Track the waypoint end block for forkchoice finality
 		waypointEndBlock := waypoint.EndBlock().Uint64()
-		if waypointEndBlock > s.lastMilestoneEndBlockNum {
-			s.lastMilestoneEndBlockNum = waypointEndBlock
+		if waypointEndBlock > s.lastFinalizedBlockNum {
+			s.lastFinalizedBlockNum = waypointEndBlock
 		}
 
 		// notify about latest waypoint end block so that eth_syncing API doesn't flicker on initial sync

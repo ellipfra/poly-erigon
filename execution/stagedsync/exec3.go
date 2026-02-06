@@ -471,9 +471,14 @@ func ExecV3(ctx context.Context,
 		lastFrozenTxNum = uint64((lastFrozenStep+1)*kv.Step(doms.StepSize())) - 1
 	}
 
+	var finalizedBlockNum uint64
+	if cfg.syncCfg.UseForkchoiceFinality {
+		finalizedBlockNum = getFinalizedBlockNum(applyTx)
+	}
+
 Loop:
 	for ; blockNum <= maxBlockNum; blockNum++ {
-		shouldGenerateChangesets := shouldGenerateChangeSets(cfg, applyTx, blockNum, maxBlockNum, initialCycle)
+		shouldGenerateChangesets := shouldGenerateChangeSets(cfg, finalizedBlockNum, blockNum, maxBlockNum, initialCycle)
 		changeSet := &changeset2.StateChangeSet{}
 		if shouldGenerateChangesets && blockNum > 0 {
 			executor.domains().SetChangesetAccumulator(changeSet)
@@ -771,6 +776,10 @@ Loop:
 				if initialCycle || !shouldGenerateChangesets {
 					// When not generating changesets (finalized blocks), we can afford longer pruning
 					// since we're generating less data overall
+					if !initialCycle {
+						logger.Debug(fmt.Sprintf("[%s] aggressive pruning via forkchoice finality", execStage.LogPrefix()),
+							"block", blockNum, "finalizedBlock", finalizedBlockNum)
+					}
 					pruneTimeout = 10 * time.Hour
 
 					if err = executor.tx().(kv.TemporalRwTx).GreedyPruneHistory(ctx, kv.CommitmentDomain); err != nil {
@@ -1043,7 +1052,7 @@ func getFinalizedBlockNum(tx kv.Getter) uint64 {
 	return *finalizedNum
 }
 
-func shouldGenerateChangeSets(cfg ExecuteBlockCfg, tx kv.Getter, blockNum, maxBlockNum uint64, initialCycle bool) bool {
+func shouldGenerateChangeSets(cfg ExecuteBlockCfg, finalizedBlockNum, blockNum, maxBlockNum uint64, initialCycle bool) bool {
 	if cfg.syncCfg.AlwaysGenerateChangesets {
 		return true
 	}
@@ -1058,11 +1067,8 @@ func shouldGenerateChangeSets(cfg ExecuteBlockCfg, tx kv.Getter, blockNum, maxBl
 	// Blocks at or before the finalized block don't need changesets since they cannot be reorged.
 	// WARNING: If finality is later reverted (e.g., faulty milestone purged by hard fork),
 	// the node will require a chaindata reset to recover.
-	if cfg.syncCfg.UseForkchoiceFinality {
-		finalizedBlockNum := getFinalizedBlockNum(tx)
-		if finalizedBlockNum > 0 && blockNum <= finalizedBlockNum {
-			return false
-		}
+	if cfg.syncCfg.UseForkchoiceFinality && finalizedBlockNum > 0 && blockNum <= finalizedBlockNum {
+		return false
 	}
 
 	// Fallback: generate changesets for blocks in the reorg window (last MaxReorgDepth blocks)
