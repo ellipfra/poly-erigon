@@ -244,7 +244,11 @@ func ExecV3(ctx context.Context,
 		if initialCycle {
 			agg.SetCollateAndBuildWorkers(min(2, estimate.StateV3Collate.Workers()))
 			agg.SetMergeWorkers(min(1, estimate.StateV3Collate.Workers()))
-			agg.SetCompressWorkers(estimate.CompressSnapshot.Workers())
+			compressWorkers := estimate.CompressSnapshot.Workers()
+			if cfg.syncCfg.CompressWorkerLimit > 0 {
+				compressWorkers = min(cfg.syncCfg.CompressWorkerLimit, compressWorkers)
+			}
+			agg.SetCompressWorkers(compressWorkers)
 		} else {
 			agg.SetCollateAndBuildWorkers(1)
 			agg.SetMergeWorkers(1)
