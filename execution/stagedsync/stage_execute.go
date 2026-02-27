@@ -489,6 +489,13 @@ func PruneExecutionStage(s *PruneState, tx kv.RwTx, cfg ExecuteBlockCfg, ctx con
 				"externalTx", useExternalTx,
 			)
 		}
+	} else if cfg.syncCfg.UseForkchoiceFinality {
+		// Forkchoice finality batches multiple blocks per cycle, causing commitment domain
+		// values to accumulate faster than the default 500ms prune budget can clear.
+		// Use aggressive timeout (>=1min triggers adaptive batch ramp-up in PruneSmallBatches).
+		// This runs in runPostForkchoiceInBackground with its own tx, so it only delays the
+		// next FC cycle via semaphore, not the current one.
+		pruneTimeout = 60 * time.Second
 	}
 
 	pruneSmallBatchesStartTime := time.Now()
