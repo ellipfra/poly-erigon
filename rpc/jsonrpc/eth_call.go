@@ -92,6 +92,11 @@ func (api *APIImpl) Call(ctx context.Context, args ethapi2.CallArgs, requestedBl
 		return nil, errors.New("header not found")
 	}
 
+	err = rpchelper.CheckBlockExecuted(tx, header.Number.Uint64())
+	if err != nil {
+		return nil, err
+	}
+
 	stateReader, err := rpchelper.CreateStateReader(ctx, tx, api._blockReader, blockNrOrHash, 0, api.filters, api.stateCache, api._txNumReader)
 	if err != nil {
 		return nil, err
@@ -120,7 +125,7 @@ func headerByNumberOrHash(ctx context.Context, tx kv.Tx, blockNrOrHash rpc.Block
 	}
 	block := api.tryBlockFromLru(hash)
 	if block != nil {
-		return block.Header(), false, nil
+		return block.Header(), isLatest, nil
 	}
 
 	blockNum, _, _, err := rpchelper.GetBlockNumber(ctx, blockNrOrHash, tx, api._blockReader, api.filters)
@@ -182,6 +187,11 @@ func (api *APIImpl) EstimateGas(ctx context.Context, argsOrNil *ethapi2.CallArgs
 	}
 
 	blockNum := *(header.Number)
+
+	err = rpchelper.CheckBlockExecuted(dbtx, header.Number.Uint64())
+	if err != nil {
+		return 0, err
+	}
 
 	stateReader, err := rpchelper.CreateStateReaderFromBlockNumber(ctx, dbtx, blockNum.Uint64(), isLatest, 0, api.stateCache, api._txNumReader)
 	if err != nil {
@@ -775,6 +785,11 @@ func (api *APIImpl) CreateAccessList(ctx context.Context, args ethapi2.CallArgs,
 	var stateReader state.StateReader
 
 	blockNumber := header.Number.Uint64()
+
+	err = rpchelper.CheckBlockExecuted(tx, blockNumber)
+	if err != nil {
+		return nil, err
+	}
 
 	if latest {
 		cacheView, err := api.stateCache.View(ctx, tx)

@@ -25,6 +25,7 @@ import (
 	"github.com/erigontech/erigon/execution/chain"
 	"github.com/erigontech/erigon/execution/consensus"
 	"github.com/erigontech/erigon/execution/types"
+	"github.com/erigontech/erigon/rpc/rpchelper"
 	"github.com/erigontech/erigon/turbo/services"
 	"github.com/erigontech/erigon/turbo/transactions"
 )
@@ -210,6 +211,10 @@ func (g *Generator) GetReceipt(ctx context.Context, cfg *chain.Config, tx kv.Tem
 		}
 	}
 
+	if err := rpchelper.CheckBlockExecuted(tx, blockNum); err != nil {
+		return nil, err
+	}
+
 	genEnv, err := g.PrepareEnv(ctx, header, cfg, tx, index)
 	if err != nil {
 		return nil, err
@@ -328,6 +333,10 @@ func (g *Generator) GetReceipts(ctx context.Context, cfg *chain.Config, tx kv.Te
 			log.Warn("Receipts cache length mismatch, regenerating...",
 				"block", block.NumberU64(), "cached", len(receiptsFromDB), "expected", txCount)
 		}
+	}
+
+	if err := rpchelper.CheckBlockExecuted(tx, block.NumberU64()); err != nil {
+		return nil, err
 	}
 
 	genEnv, err := g.PrepareEnv(ctx, block.HeaderNoCopy(), cfg, tx, 0)
