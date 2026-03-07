@@ -18,6 +18,7 @@ import (
 	"github.com/erigontech/erigon/execution/consensus"
 	"github.com/erigontech/erigon/execution/types"
 	bortypes "github.com/erigontech/erigon/polygon/bor/types"
+	"github.com/erigontech/erigon/rpc/rpchelper"
 	"github.com/erigontech/erigon/turbo/services"
 	"github.com/erigontech/erigon/turbo/transactions"
 )
@@ -59,6 +60,11 @@ func (g *BorGenerator) GenerateBorReceipt(ctx context.Context, tx kv.TemporalTx,
 	txIndex := len(block.Transactions())
 	if chainConfig.Bor.IsMadhugiri(block.NumberU64()) {
 		txIndex = len(block.Transactions()) - 1
+	}
+
+	err := rpchelper.CheckBlockExecuted(tx, block.NumberU64())
+	if err != nil {
+		return nil, err
 	}
 
 	txNumsReader := g.blockReader.TxnumReader(ctx)
