@@ -1037,7 +1037,10 @@ func (s *Sync) initialiseCcb(ctx context.Context, result syncToTipResult) (*Cano
 			return nil, fmt.Errorf("unexpected rootNum > tipNum: %d > %d", rootNum, tipNum)
 		}
 		// Initialize lastFinalizedBlockNum from the latest waypoint (milestone or checkpoint)
-		s.lastFinalizedBlockNum = rootNum
+		// Use monotonic guard to prevent regression on catch-up re-entry
+		if rootNum > s.lastFinalizedBlockNum {
+			s.lastFinalizedBlockNum = rootNum
+		}
 		s.logger.Debug(syncLogPrefix("initialized milestone finality"), "lastFinalizedBlock", s.lastFinalizedBlockNum)
 	}
 
