@@ -64,6 +64,11 @@ func Configure(Schema SchemaGen, a AggSetters, dirs datadir.Dirs, salt *uint32, 
 }
 
 const AggregatorSqueezeCommitmentValues = true
+
+// MaxNonFuriousDirtySpacePerTx is currently unreferenced: the SpaceDirty early-exit guard
+// in PruneSmallBatches that consumed it was removed by our cherry-pick of upstream #18788
+// (commit "prune: remove early-exit based on DirtySpace"). Kept to minimize divergence from
+// upstream and avoid rebase conflicts if a future change reintroduces the guard.
 const MaxNonFuriousDirtySpacePerTx = 64 * datasize.MB
 
 var dbgCommBtIndex = dbg.EnvBool("AGG_COMMITMENT_BT", false)

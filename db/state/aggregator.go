@@ -1000,6 +1000,9 @@ func (at *AggregatorRoTx) PruneSmallBatches(ctx context.Context, timeout time.Du
 	//  Not on tip of chain: must be aggressive (prune as much as possible) by bigger batches
 
 	furiousPrune := timeout > 5*time.Hour
+	// COUPLING: the forkchoice-finality prune path passes exactly 60s to hit this inclusive
+	// threshold and enable the adaptive batch ramp-up (see PruneExecutionStage in
+	// execution/stagedsync/stage_execute.go). Do not change to a strict `>` without updating it.
 	aggressivePrune := !furiousPrune && timeout >= 1*time.Minute
 
 	var pruneLimit uint64 = uint64(dbg.EnvInt("ERIGON_PRUNE_LIMIT", 100))

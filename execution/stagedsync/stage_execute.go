@@ -491,8 +491,11 @@ func PruneExecutionStage(s *PruneState, tx kv.RwTx, cfg ExecuteBlockCfg, ctx con
 		}
 	} else if cfg.syncCfg.UseForkchoiceFinality {
 		// Forkchoice finality batches multiple blocks per cycle, causing commitment domain
-		// values to accumulate faster than the default 500ms prune budget can clear.
-		// Use aggressive timeout (>=1min triggers adaptive batch ramp-up in PruneSmallBatches).
+		// values to accumulate faster than the default (~1s) quick prune budget can clear.
+		// COUPLING: this 60s value must stay >= the aggressivePrune threshold in
+		// AggregatorRoTx.PruneSmallBatches (db/state/aggregator.go: `timeout >= 1*time.Minute`),
+		// which is what enables the adaptive batch ramp-up we rely on here. The threshold is
+		// inclusive, so 60s is exactly on it — keep them in sync if either side changes.
 		// This runs in runPostForkchoiceInBackground with its own tx, so it only delays the
 		// next FC cycle via semaphore, not the current one.
 		pruneTimeout = 60 * time.Second
